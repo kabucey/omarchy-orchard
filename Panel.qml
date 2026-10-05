@@ -218,7 +218,8 @@ Panel {
     if (!drag || !drag.moved) { dragNew = null; return false }
     var span = Logic.dragSpan(drag.anchor, drag.point, dayWindow)
     dragNew = null
-    startQuickNew(drag.dayKey, span.start, span.end, block.anchorFor(span))
+    startQuickNew(Logic.newEventAt(drag.dayKey, span.start, span.end, newEventCalendar),
+                  block.anchorFor(span))
     return true
   }
 
@@ -228,15 +229,58 @@ Panel {
     dragNew = null
     if (!canDrawEvent) return
     var span = Logic.clickSpan(y, hourHeight, dayWindow)
-    startQuickNew(dayKey, span.start, span.end, block.anchorFor(span))
+    startQuickNew(Logic.newEventAt(dayKey, span.start, span.end, newEventCalendar),
+                  block.anchorFor(span))
   }
 
-  function startQuickNew(dayKey, startMinute, endMinute, anchor) {
+  // The same for the all-day band: a click there is an all-day event on
+  // that day, and a drag along the week's band one over every day it
+  // crossed. While the pointer is down: the day it went down on and the
+  // day it is over now.
+  property var bandDrag: null
+
+  // What the band draws as the new event across `dayKeys`: the drag while
+  // it lasts, then the draft's own dates, so the bar follows the form.
+  function drawnBarIn(dayKeys) {
+    if (bandDrag) {
+      var days = Logic.daySpan(bandDrag.anchor, bandDrag.point)
+      return Logic.daysBar(days.from, days.to, dayKeys)
+    }
+    if (dragNew) return null
+    return draftOnRail ? Logic.draftBarIn(draft, dayKeys) : null
+  }
+
+  // A press on the band. As on the rail, with the popover up it only puts
+  // the popover away; false means nothing is being drawn.
+  function beginBandDraw(dayKey) {
+    if (quickOpen) { cancelQuickNew(); return false }
+    if (!canDrawEvent) return false
+    bandDrag = { anchor: dayKey, point: dayKey }
+    return true
+  }
+
+  function moveBandDraw(dayKey) {
+    if (!bandDrag || bandDrag.point === dayKey) return
+    bandDrag = { anchor: bandDrag.anchor, point: dayKey }
+  }
+
+  // Letting go over `bar`, the band's drawn event. A click is a drag that
+  // never left its day, so it too makes an event.
+  function endBandDraw(bar) {
+    var drag = bandDrag
+    if (!drag) return false
+    bandDrag = null
+    var days = Logic.daySpan(drag.anchor, drag.point)
+    startQuickNew(Logic.newAllDayEventOn(days.from, days.to, newEventCalendar),
+                  bar.anchorFor(Logic.daysBar(days.from, days.to, bar.dayKeys)))
+    return true
+  }
+
+  function startQuickNew(base, anchor) {
     dayNotice = ""
     if (viewerOpen) closeEvent()
     settingsOpen = false
     searchOpen = false
-    var base = Logic.newEventAt(dayKey, startMinute, endMinute, newEventCalendar)
     creating = true
     draftBase = base
     draft = Logic.editDraft(base, localZone)
@@ -1418,6 +1462,57 @@ Panel {
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
       }
+    }
+  }
+
+  // The all-day event being drawn, on whichever band it is drawn on:
+  // `dayKeys` are the band's columns, `firstX` where the first starts in the
+  // parent and `dayWidth` how wide each is. Its `y` is the lane the band
+  // keeps for it. Drawn the way DrawnBlock is.
+  component DrawnBar: Rectangle {
+    id: drawnBar
+    property var dayKeys: []
+    property real firstX: 0
+    property real dayWidth: 0
+    // The room left either side, so a bar does not touch its neighbours.
+    property real inset: 1
+    readonly property var bar: root.drawnBarIn(dayKeys)
+    readonly property color cardFill:
+      Logic.opaqueTint(root.drawnColor, Color.popups.background, 0.4)
+    readonly property string cardForeground:
+      Logic.ensureContrast(root.drawnColor, cardFill, 4.5)
+    readonly property string title: root.draftOnRail && root.draft
+      && Logic.singleLine(root.draft.title) ? Logic.singleLine(root.draft.title) : "New Event"
+
+    // Where the bar will be once it shows `wanted`, in keyCatcher's space.
+    function anchorFor(wanted) {
+      if (!wanted) return Qt.rect(0, 0, 0, 0)
+      var corner = parent.mapToItem(keyCatcher, firstX + wanted.startCol * dayWidth + inset, y)
+      return Qt.rect(corner.x, corner.y, wanted.span * dayWidth - inset * 2, height)
+    }
+
+    visible: bar !== null
+    x: bar ? firstX + bar.startCol * dayWidth + inset : firstX
+    width: bar ? bar.span * dayWidth - inset * 2 : 0
+    height: root.slotHeight
+    radius: Style.cornerRadius > 0 ? Style.cornerRadius : Style.space(3)
+    color: cardFill
+    border.width: 1
+    border.color: root.drawnColor
+    z: 1000
+
+    Text {
+      anchors.fill: parent
+      anchors.leftMargin: Style.spacing.sm
+      anchors.rightMargin: Style.spacing.sm
+      verticalAlignment: Text.AlignVCenter
+      elide: Text.ElideRight
+      textFormat: Text.PlainText
+      text: (drawnBar.bar && drawnBar.bar.continuesBefore ? "◂ " : "") + drawnBar.title
+      color: drawnBar.cardForeground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.weight: Font.DemiBold
     }
   }
 
@@ -3136,17 +3231,35 @@ Panel {
             onPicked: function (choice) { root.setDraft("calendarUrl", choice) }
           }
 
+          // An all-day event drawn on the band is a run of days, so it is
+          // the days that are offered, not the hours.
           Text {
             width: parent.width
             topPadding: Style.spacing.xs
             textFormat: Text.PlainText
-            text: Logic.shortDate(quickBody.d.startDate || "")
+            text: quickBody.d.allDay ? "All day"
+              : Logic.shortDate(quickBody.d.startDate || "")
             color: root.subdued
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
           }
 
+          DateField {
+            visible: !!quickBody.d.allDay
+            width: parent.width
+            value: quickBody.d.startDate || ""
+            onPicked: function (key) { root.setDraft("startDate", key) }
+          }
+
+          DateField {
+            visible: !!quickBody.d.allDay
+            width: parent.width
+            value: quickBody.d.endDate || ""
+            onPicked: function (key) { root.setDraft("endDate", key) }
+          }
+
           Row {
+            visible: !quickBody.d.allDay
             width: parent.width
             spacing: Style.spacing.sm
             TimeField {
@@ -5231,66 +5344,101 @@ Panel {
             Item { width: 1; height: root.halfRuleGap }
 
             // All-day events have no place on a clock, so they sit above it
-            // — full width, as bars, the way the month draws them.
-            Column {
+            // — full width, as bars, the way the month draws them. The band
+            // keeps a lane even on a day without any, so there is always
+            // somewhere to click for a new one, and one more under the bars
+            // while a new one is being made.
+            Item {
               id: dayBand
               width: calendarColumn.width
-              spacing: root.slotGap
-              visible: root.selected.allDay.length > 0
+              height: Math.max(1, root.selected.allDay.length + (dayDrawnBar.visible ? 1 : 0))
+                      * root.slotPitch - root.slotGap
 
-              Repeater {
-                model: root.selected.allDay
+              Text {
+                width: root.hourGutter - Style.spacing.sm
+                height: root.slotHeight
+                verticalAlignment: Text.AlignVCenter
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+                text: "all-day"
+                color: root.subdued
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
 
-                Rectangle {
-                  required property var modelData
-                  readonly property color cardColor: root.colorOf(modelData)
-                  readonly property color cardFill:
-                    Logic.opaqueTint(cardColor, Color.popups.background, 0.24)
-                  readonly property string cardForeground:
-                    Logic.ensureContrast(cardColor, cardFill, 4.5)
-                  x: root.hourGutter
-                  width: calendarColumn.width - root.hourGutter
-                  height: root.slotHeight
-                  radius: Style.cornerRadius > 0 ? Style.cornerRadius : Style.space(3)
-                  color: cardFill
+              // A click on the band makes an all-day event on the day.
+              // Declared before the bars so they still take their own clicks.
+              MouseArea {
+                x: root.hourGutter
+                width: parent.width - root.hourGutter
+                height: parent.height
+                onPressed: root.beginBandDraw(root.selectedKey)
+                onReleased: root.endBandDraw(dayDrawnBar)
+                onCanceled: root.bandDrag = null
+              }
 
-                  Text {
-                    anchors.fill: parent
-                    anchors.leftMargin: Style.spacing.sm
-                    anchors.rightMargin: Style.spacing.sm
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    textFormat: Text.PlainText
-                    text: Logic.singleLine(modelData.title)
-                    color: cardForeground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    font.weight: Font.DemiBold
-                  }
+              Column {
+                width: parent.width
+                spacing: root.slotGap
 
-                  MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: root.openEvent(modelData)
+                Repeater {
+                  model: root.selected.allDay
+
+                  Rectangle {
+                    required property var modelData
+                    readonly property color cardColor: root.colorOf(modelData)
+                    readonly property color cardFill:
+                      Logic.opaqueTint(cardColor, Color.popups.background, 0.24)
+                    readonly property string cardForeground:
+                      Logic.ensureContrast(cardColor, cardFill, 4.5)
+                    x: root.hourGutter
+                    width: calendarColumn.width - root.hourGutter
+                    height: root.slotHeight
+                    radius: Style.cornerRadius > 0 ? Style.cornerRadius : Style.space(3)
+                    color: cardFill
+
+                    Text {
+                      anchors.fill: parent
+                      anchors.leftMargin: Style.spacing.sm
+                      anchors.rightMargin: Style.spacing.sm
+                      verticalAlignment: Text.AlignVCenter
+                      elide: Text.ElideRight
+                      textFormat: Text.PlainText
+                      text: Logic.singleLine(modelData.title)
+                      color: cardForeground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.weight: Font.DemiBold
+                    }
+
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.openEvent(modelData)
+                    }
                   }
                 }
               }
+
+              DrawnBar {
+                id: dayDrawnBar
+                dayKeys: [root.selectedKey]
+                firstX: root.hourGutter
+                dayWidth: calendarColumn.width - root.hourGutter
+                inset: 0
+                y: root.selected.allDay.length * root.slotPitch
+              }
             }
 
-            Item {
-              width: 1
-              height: root.halfRuleGap
-              visible: dayBand.visible
-            }
+            Item { width: 1; height: root.halfRuleGap }
 
-            Rule { width: calendarColumn.width; visible: dayBand.visible }
+            Rule { width: calendarColumn.width }
 
             Scroller {
               id: dayRail
               width: calendarColumn.width
               height: Math.max(root.hourHeight * 6,
-                               root.cellHeight * 6 - dayBand.height
-                               - (dayBand.visible ? root.ruleGap : 0))
+                               root.cellHeight * 6 - dayBand.height - root.ruleGap)
               contentHeight: railBody.height
               // A narrowed day may fit whole, in which case there is nothing
               // to scroll and nothing to open on.
@@ -5617,12 +5765,14 @@ Panel {
             Rule { width: calendarColumn.width }
 
             // All-day events sit outside the clock and retain their spans
-            // across adjacent day columns.
+            // across adjacent day columns. As on the day, the band keeps a
+            // lane when the week has none, and one more under the bars for
+            // a new event being made.
             Item {
               id: weekAllDayBand
-              visible: root.weekLanes > 0
               width: calendarColumn.width
-              height: visible ? root.weekLanes * root.slotPitch + root.ruleGap : 0
+              height: Math.max(1, root.weekLanes + (weekDrawnBar.visible ? 1 : 0))
+                      * root.slotPitch + root.ruleGap
 
               Text {
                 width: root.hourGutter - Style.spacing.sm
@@ -5633,6 +5783,27 @@ Panel {
                 color: root.subdued
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
+              }
+
+              // A click on a day of the band makes an all-day event on it,
+              // and a drag along the band one over every day it crossed.
+              // Declared before the bars so they still take their own clicks.
+              MouseArea {
+                x: root.hourGutter
+                width: weekView.timetableWidth
+                height: parent.height
+                // A drag here draws; it does not move anything under it.
+                preventStealing: true
+
+                function dayAt(x) {
+                  return root.weekKeys[Logic.dragColumn(x, weekView.dayWidth,
+                                                        root.weekKeys.length)]
+                }
+
+                onPressed: function (mouse) { root.beginBandDraw(dayAt(mouse.x)) }
+                onPositionChanged: function (mouse) { root.moveBandDraw(dayAt(mouse.x)) }
+                onReleased: root.endBandDraw(weekDrawnBar)
+                onCanceled: root.bandDrag = null
               }
 
               Repeater {
@@ -5674,6 +5845,14 @@ Panel {
                     onClicked: root.openEvent(modelData.event)
                   }
                 }
+              }
+
+              DrawnBar {
+                id: weekDrawnBar
+                dayKeys: root.weekKeys
+                firstX: root.hourGutter
+                dayWidth: weekView.dayWidth
+                y: Math.round(root.ruleGap / 2) + root.weekLanes * root.slotPitch
               }
 
               Rule { width: parent.width; anchors.bottom: parent.bottom }

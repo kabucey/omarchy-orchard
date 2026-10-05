@@ -2515,6 +2515,59 @@ function newEventAt(dayKey, startMinute, endMinute, calendarUrl) {
   return base
 }
 
+// ---------------------------------------------- drawing a new all-day event
+//
+// A click on the all-day band makes an all-day event on that day; a drag
+// along the week's band makes one over every day it crossed.
+
+// The column of the week under `x`, a distance across its day columns,
+// kept inside the week.
+function dragColumn(x, dayWidth, count) {
+  var col = Math.floor((Number(x) || 0) / Math.max(1, dayWidth))
+  return Math.max(0, Math.min(Math.max(1, count) - 1, col))
+}
+
+// The days between where the drag began and where the pointer is, either
+// way along.
+function daySpan(anchorKey, pointKey) {
+  return anchorKey <= pointKey ? { from: anchorKey, to: pointKey }
+                               : { from: pointKey, to: anchorKey }
+}
+
+// A blank all-day event over the days `fromKey` to `toKey`, both included.
+// Its end is the day after the last, the way an all-day event stores it.
+function newAllDayEventOn(fromKey, toKey, calendarUrl) {
+  var span = daySpan(fromKey, toKey || fromKey)
+  var base = newEvent(span.from, "", "", calendarUrl)
+  base.allDay = true
+  base.start = span.from
+  base.end = addDays(span.to, 1)
+  return base
+}
+
+// Where the days `fromKey` to `toKey` lie across `dayKeys`, as one of
+// allDayBars' bars without its event, or null when they miss them all.
+function daysBar(fromKey, toKey, dayKeys) {
+  if (!dayKeys.length || !isDateKey(fromKey) || !isDateKey(toKey)) return null
+  var firstKey = dayKeys[0], lastKey = dayKeys[dayKeys.length - 1]
+  if (toKey < firstKey || fromKey > lastKey) return null
+  var startCol = Math.max(0, daysBetween(firstKey, fromKey))
+  var endCol = Math.min(dayKeys.length - 1, daysBetween(firstKey, toKey))
+  return {
+    startCol: startCol,
+    span: endCol - startCol + 1,
+    continuesBefore: fromKey < firstKey,
+    continuesAfter: toKey > lastKey
+  }
+}
+
+// Where an all-day draft lies across `dayKeys`, or null when it is timed.
+function draftBarIn(draft, dayKeys) {
+  if (!draft || !draft.allDay) return null
+  var to = draft.endDate >= draft.startDate ? draft.endDate : draft.startDate
+  return daysBar(draft.startDate, to, dayKeys)
+}
+
 // Where a draft lies on one day's rail, in minutes, or null when it is not
 // a timed event starting that day. Its end is cut at midnight.
 function draftSpanOn(draft, dayKey) {

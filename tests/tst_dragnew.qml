@@ -101,4 +101,57 @@ TestCase {
     compare(top.start, 8 * 60)
     compare(top.end, 9 * 60)
   }
+
+  function test_drag_column_stays_inside_the_week() {
+    compare(Logic.dragColumn(0, 100, 7), 0)
+    compare(Logic.dragColumn(250, 100, 7), 2)
+    compare(Logic.dragColumn(-30, 100, 7), 0)
+    compare(Logic.dragColumn(5000, 100, 7), 6)
+  }
+
+  function test_day_span_runs_either_way_along() {
+    var right = Logic.daySpan("2026-10-05", "2026-10-07")
+    compare(right.from, "2026-10-05")
+    compare(right.to, "2026-10-07")
+    var left = Logic.daySpan("2026-10-07", "2026-10-05")
+    compare(left.from, "2026-10-05")
+    compare(left.to, "2026-10-07")
+  }
+
+  function test_new_all_day_event_over_days() {
+    var one = Logic.newAllDayEventOn("2026-10-05", "2026-10-05", "cal")
+    compare(one.allDay, true)
+    compare(one.start, "2026-10-05")
+    compare(one.end, "2026-10-06")
+    compare(one.calendarUrl, "cal")
+    compare(one.uid, "")
+
+    // Drawn right to left, it still starts on the earlier day.
+    var three = Logic.newAllDayEventOn("2026-10-07", "2026-10-05", "cal")
+    compare(three.start, "2026-10-05")
+    compare(three.end, "2026-10-08")
+    var draft = Logic.editDraft(three, "America/New_York")
+    compare(draft.allDay, true)
+    compare(draft.startDate, "2026-10-05")
+    compare(draft.endDate, "2026-10-07")
+  }
+
+  function test_draft_bar_follows_the_draft() {
+    var week = Logic.weekDays("2026-10-05", 0)
+    var draft = Logic.editDraft(Logic.newAllDayEventOn("2026-10-06", "2026-10-07", "cal"), "")
+    var bar = Logic.draftBarIn(draft, week)
+    compare(bar.startCol, week.indexOf("2026-10-06"))
+    compare(bar.span, 2)
+    compare(bar.continuesBefore, false)
+    compare(bar.continuesAfter, false)
+
+    // Past the week's end it is cut there, and says it goes on.
+    var long = Logic.withField(draft, "endDate", Logic.addDays(week[6], 3))
+    bar = Logic.draftBarIn(long, week)
+    compare(bar.startCol + bar.span, 7)
+    compare(bar.continuesAfter, true)
+
+    compare(Logic.draftBarIn(draft, Logic.weekDays("2026-10-20", 0)), null)
+    compare(Logic.draftBarIn(Logic.withField(draft, "allDay", false), week), null)
+  }
 }
