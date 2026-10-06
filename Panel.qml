@@ -276,6 +276,123 @@ Panel {
     return true
   }
 
+  // ------------------------------------------------------- moving an event
+  //
+  // Pressing and holding an event on the day or week rail picks it up: it
+  // follows the pointer in quarter hours, keeping its length, and in the
+  // week from day to day. Letting go somewhere new opens the event and
+  // saves it there through the form, so a series is asked how far the
+  // move reaches, just as a change typed into the form would be.
+
+  // How long a press has to be held before it picks the event up.
+  readonly property int moveHoldInterval: 200
+
+  // While it is held: the event, the day and minute its block was picked up
+  // from, the minute under the pointer then, and the day and minute the
+  // block is at now.
+  property var moveDrag: null
+  // Let go somewhere new: drawn there while its detail loads and it saves.
+  property var pendingMove: null
+
+  // Only what can be written to can be moved, and only one at a time.
+  function canMove(event) {
+    if (!event || !event.uid || event.allDay || pendingMove || editorDirty) return false
+    if (!service || service.writing) return false
+    var calendar = Logic.calendarOf(calendars, event.calendarUrl)
+    return !!calendar && !calendar.readonly
+  }
+
+  // A held press on `block`, one of a rail's laid-out blocks.
+  function beginMove(block, dayKey, minute) {
+    if (!canMove(block.event)) return false
+    cancelQuickNew()
+    moveDrag = { event: block.event, fromKey: dayKey, fromStart: block.startMinute,
+                 length: block.endMinute - block.startMinute, press: minute,
+                 dayKey: dayKey, start: block.startMinute }
+    return true
+  }
+
+  function moveTo(dayKey, minute) {
+    if (!moveDrag) return
+    var start = Logic.movedStart(moveDrag.fromStart, moveDrag.press, minute,
+                                 moveDrag.length, dayWindow)
+    if (dayKey === moveDrag.dayKey && start === moveDrag.start) return
+    var next = Logic.copyOf(moveDrag)
+    next.dayKey = dayKey
+    next.start = start
+    moveDrag = next
+  }
+
+  // Letting go. Where it was picked up from is not a move.
+  function endMove() {
+    var drag = moveDrag
+    moveDrag = null
+    if (!drag) return
+    var minutes = Logic.daysBetween(drag.fromKey, drag.dayKey) * 24 * 60
+                + drag.start - drag.fromStart
+    if (minutes === 0) return
+    openEvent(drag.event)
+    // Compared by uid: the rail's rows reach here as copies, never the same
+    // object twice.
+    if (!viewerOpen || !viewerSeed || viewerSeed.uid !== drag.event.uid) return
+    pendingMove = { event: drag.event, minutes: minutes, dayKey: drag.dayKey,
+                    start: drag.start, length: drag.length }
+  }
+
+  // Where the event being moved is drawn on `dayKey`: under the pointer while
+  // it is held, then where it was let go until it has saved — or until the
+  // form it was saved through is left open with the move in it, where the
+  // form's own times say where it is going.
+  function movedSpanOn(dayKey) {
+    var move = moveDrag || (pendingMove && (!editorOpen || pendingAction === "save"
+                                            || (service && service.writing))
+                            ? pendingMove : null)
+    if (!move || move.dayKey !== dayKey) return null
+    return { start: move.start, end: move.start + move.length }
+  }
+
+  readonly property var movingEvent: moveDrag ? moveDrag.event
+    : pendingMove ? pendingMove.event : null
+  readonly property color movingColor: movingEvent ? colorOf(movingEvent) : Color.accent
+  readonly property string movingTitle: movingEvent ? Logic.singleLine(movingEvent.title) : ""
+
+  // The same occurrence: a reload hands the rail new objects for it.
+  function isMoving(event) {
+    var moving = movingEvent
+    return !!moving && !!event && moving.uid === event.uid
+        && (moving.rid || "") === (event.rid || "") && moving.start === event.start
+  }
+
+  // The event's detail is in: the move goes through the form, as an edit.
+  function applyMove() {
+    var move = pendingMove
+    if (!move) return
+    if (!viewerEditable) {
+      closeEvent()
+      dayNoticeBad = true
+      dayNotice = "That event can’t be moved: its calendar is read-only."
+      return
+    }
+    startEdit()
+    draft = Logic.shiftedDraft(draft, move.minutes)
+    requestSave()
+  }
+
+  // The list's row can already carry the href, so the viewer counts as
+  // loaded before the detail is in; it is the detail — the etag, alerts and
+  // zones a save is made from — that the move waits for.
+  Connections {
+    target: root.service
+    function onEventDetailChanged() {
+      var detail = root.service.eventDetail
+      if (root.pendingMove && detail && detail.uid === root.pendingMove.event.uid
+          && !root.editorOpen) root.applyMove()
+    }
+    function onEventErrorChanged() {
+      if (root.service.eventError !== "") root.pendingMove = null
+    }
+  }
+
   function startQuickNew(base, anchor) {
     dayNotice = ""
     if (viewerOpen) closeEvent()
@@ -352,6 +469,7 @@ Panel {
   function cancelEdit() {
     editorOpen = false
     quickOpen = false
+    pendingMove = null
     // A new event has no viewer to go back to: cancelling it is leaving. A
     // copy does — the original is still open behind it.
     if (creating) {
@@ -1381,20 +1499,22 @@ Panel {
   // The event a drag is drawing, on whichever rail it is drawn on: `top` is
   // where the rail's first hour sits in the parent, `dayKey` the day the
   // block belongs to. Drawn over everything else on the rail, in the colour
-  // of the calendar it is going to.
+  // of the calendar it is going to. An event being moved is drawn the same
+  // way, with its own span, colour and title.
   component DrawnBlock: Rectangle {
     id: drawn
     property string dayKey: ""
     property real hourHeight: root.hourHeight
     property real railY: 0
-    readonly property var span: root.drawnSpanOn(dayKey)
+    property var span: root.drawnSpanOn(dayKey)
+    property color tint: root.drawnColor
     readonly property int firstMinute: span ? Math.max(span.start, root.dayWindow.startMinute) : 0
     readonly property int lastMinute: span ? Math.min(span.end, root.dayWindow.endMinute) : 0
     readonly property color cardFill:
-      Logic.opaqueTint(root.drawnColor, Color.popups.background, 0.4)
+      Logic.opaqueTint(drawn.tint, Color.popups.background, 0.4)
     readonly property string cardForeground:
-      Logic.ensureContrast(root.drawnColor, cardFill, 4.5)
-    readonly property string title: root.draftOnRail && root.draft
+      Logic.ensureContrast(drawn.tint, cardFill, 4.5)
+    property string title: root.draftOnRail && root.draft
       && Logic.singleLine(root.draft.title) ? Logic.singleLine(root.draft.title) : "New Event"
 
     // Where the block will be once it shows `wanted`, in keyCatcher's space,
@@ -1414,7 +1534,7 @@ Panel {
     radius: Style.cornerRadius > 0 ? Style.cornerRadius : Style.space(3)
     color: cardFill
     border.width: 1
-    border.color: root.drawnColor
+    border.color: drawn.tint
     z: 1000
 
     Rectangle {
@@ -1425,7 +1545,7 @@ Panel {
       anchors.bottomMargin: Style.spacing.xxs
       width: Style.space(3)
       radius: width / 2
-      color: root.drawnColor
+      color: drawn.tint
     }
 
     Column {
@@ -5584,6 +5704,8 @@ Panel {
                     color: cardFill
                     border.width: 0
                     z: index
+                    // Where it is moving from, while it moves.
+                    opacity: root.isMoving(modelData.event) ? 0.4 : 1
 
                     required property int index
 
@@ -5641,10 +5763,29 @@ Panel {
                       }
                     }
 
+                    // A click opens it; a press held a moment picks it up
+                    // to move, and it does not scroll the rail.
                     MouseArea {
                       anchors.fill: parent
                       hoverEnabled: true
-                      cursorShape: Qt.PointingHandCursor
+                      cursorShape: root.moveDrag ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                      pressAndHoldInterval: root.moveHoldInterval
+                      preventStealing: true
+
+                      function minuteAt(mouse) {
+                        var at = mapToItem(railBody, mouse.x, mouse.y)
+                        return Logic.railMinute(at.y - root.railTop, dayView.hourHeight,
+                                                root.dayWindow)
+                      }
+
+                      onPressAndHold: function (mouse) {
+                        root.beginMove(modelData, root.selectedKey, minuteAt(mouse))
+                      }
+                      onPositionChanged: function (mouse) {
+                        if (root.moveDrag) root.moveTo(root.selectedKey, minuteAt(mouse))
+                      }
+                      onReleased: root.endMove()
+                      onCanceled: root.moveDrag = null
                       onClicked: root.openEvent(modelData.event)
                     }
                   }
@@ -5657,6 +5798,17 @@ Panel {
                   railY: root.railTop
                   x: root.hourGutter + root.slotGap
                   width: railBody.width - root.hourGutter - root.slotGap * 2
+                }
+
+                DrawnBlock {
+                  dayKey: root.selectedKey
+                  hourHeight: dayView.hourHeight
+                  railY: root.railTop
+                  x: root.hourGutter + root.slotGap
+                  width: railBody.width - root.hourGutter - root.slotGap * 2
+                  span: root.movedSpanOn(dayKey)
+                  tint: root.movingColor
+                  title: root.movingTitle
                 }
 
                 // Now, as a line across the rail — only on the day it is,
@@ -6060,6 +6212,8 @@ Panel {
                         color: cardFill
                         border.width: 0
                         z: index
+                        // Where it is moving from, while it moves.
+                        opacity: root.isMoving(modelData.event) ? 0.4 : 1
 
                         required property int index
 
@@ -6116,10 +6270,34 @@ Panel {
                           }
                         }
 
+                        // As on the day, and once picked up it can go to
+                        // any day of the week as well as any time.
                         MouseArea {
                           anchors.fill: parent
                           hoverEnabled: true
-                          cursorShape: Qt.PointingHandCursor
+                          cursorShape: root.moveDrag ? Qt.ClosedHandCursor
+                                                     : Qt.PointingHandCursor
+                          pressAndHoldInterval: root.moveHoldInterval
+                          preventStealing: true
+
+                          function minuteAt(mouse) {
+                            var at = mapToItem(weekDay, mouse.x, mouse.y)
+                            return Logic.railMinute(at.y, weekView.hourHeight, root.dayWindow)
+                          }
+                          function dayAt(mouse) {
+                            var at = mapToItem(weekDay.parent, mouse.x, mouse.y)
+                            return root.weekKeys[Logic.dragColumn(
+                              at.x - root.hourGutter, weekView.dayWidth, root.weekKeys.length)]
+                          }
+
+                          onPressAndHold: function (mouse) {
+                            root.beginMove(modelData, weekDay.modelData, minuteAt(mouse))
+                          }
+                          onPositionChanged: function (mouse) {
+                            if (root.moveDrag) root.moveTo(dayAt(mouse), minuteAt(mouse))
+                          }
+                          onReleased: root.endMove()
+                          onCanceled: root.moveDrag = null
                           onClicked: root.openEvent(modelData.event)
                         }
                       }
@@ -6131,6 +6309,16 @@ Panel {
                       hourHeight: weekView.hourHeight
                       x: 2
                       width: weekDay.width - 4
+                    }
+
+                    DrawnBlock {
+                      dayKey: weekDay.modelData
+                      hourHeight: weekView.hourHeight
+                      x: 2
+                      width: weekDay.width - 4
+                      span: root.movedSpanOn(dayKey)
+                      tint: root.movingColor
+                      title: root.movingTitle
                     }
                   }
                 }

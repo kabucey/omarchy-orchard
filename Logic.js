@@ -2515,6 +2515,45 @@ function newEventAt(dayKey, startMinute, endMinute, calendarUrl) {
   return base
 }
 
+// ----------------------------------------------------- moving a timed event
+//
+// Pressing and holding an event on the day or week rail picks it up. It
+// then follows the pointer in quarter hours, and in the week from day to
+// day, keeping its length.
+
+// The minute of the rail `y` down it, as it is: not snapped, not kept on
+// the rail, so a block can be followed exactly.
+function railMinute(y, hourHeight, window) {
+  var from = window ? window.startMinute : 0
+  return from + (Number(y) || 0) * 60 / Math.max(1, hourHeight)
+}
+
+// Where a block that started at `startMinute` starts now that the pointer
+// that picked it up at `pressMinute` is at `pointerMinute`. It moves by
+// whole quarter hours, so an event at 9:10 goes to 9:25, not 9:15, and
+// stays on the rail, end and all.
+function movedStart(startMinute, pressMinute, pointerMinute, length, window) {
+  var from = window ? window.startMinute : 0
+  var to = window ? window.endMinute : DAY_MINUTES
+  var shift = Math.round((pointerMinute - pressMinute) / DRAG_STEP) * DRAG_STEP
+  var latest = Math.max(from, to - length)
+  return Math.max(Math.min(from, startMinute), Math.min(Math.max(latest, startMinute),
+                                                         startMinute + shift))
+}
+
+// A timed draft moved `minutes` later, or earlier when negative, its length
+// kept. The move is in the event's own clock, so an event written in Tokyo
+// moves by as much as the rail it was dragged on did.
+function shiftedDraft(draft, minutes) {
+  if (!draft || draft.allDay || !minutes || !isClock(draft.startTime)
+      || !isDateKey(draft.startDate)) return draft
+  var at = Number(draft.startTime.slice(0, 2)) * 60 + Number(draft.startTime.slice(3, 5))
+         + minutes
+  var moved = withField(draft, "startDate",
+                        addDays(draft.startDate, Math.floor(at / DAY_MINUTES)))
+  return withField(moved, "startTime", addClock("00:00", at))
+}
+
 // ---------------------------------------------- drawing a new all-day event
 //
 // A click on the all-day band makes an all-day event on that day; a drag
