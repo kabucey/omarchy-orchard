@@ -3019,9 +3019,9 @@ def event_detail(conn, uid: str, rid: str, at: str = "", href: str = "") -> dict
     master, overrides = split_master_overrides(parsed, comps)
     chosen = master
     if rid:
-        for at, comp in overrides.items():
+        for key, comp in overrides.items():
             recurrence_id = comp.get_recurrenceid()
-            if rid in (str(at), recurrence_id.as_ical_string() if recurrence_id else ""):
+            if rid in (str(key), recurrence_id.as_ical_string() if recurrence_id else ""):
                 chosen = comp
                 break
     if chosen is None:

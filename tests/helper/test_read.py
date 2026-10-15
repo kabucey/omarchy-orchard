@@ -83,6 +83,33 @@ class ResourceIdentity(unittest.TestCase):
         self.assertEqual(caught.exception.code, "ambiguous")
 
 
+MOVED = "\r\n".join([
+    "BEGIN:VCALENDAR", "VERSION:2.0",
+    "BEGIN:VEVENT", "UID:moved-1", "DTSTART:20261007T143000Z", "DTEND:20261007T150000Z",
+    "RRULE:FREQ=WEEKLY", "SUMMARY:Weekly", "END:VEVENT",
+    "BEGIN:VEVENT", "UID:moved-1", "RECURRENCE-ID:20261014T143000Z",
+    "DTSTART:20261015T141500Z", "DTEND:20261015T144500Z", "SUMMARY:Weekly, moved",
+    "END:VEVENT", "END:VCALENDAR", ""])
+
+
+class MovedOccurrence(unittest.TestCase):
+    def test_moved_occurrence_opens_with_its_start(self):
+        # The panel sends both the occurrence's rid and its start (`at`);
+        # matching the rid to an override must not lose the `at` it was given.
+        with tempfile.TemporaryDirectory() as folder:
+            conn = sqlite3.connect(os.path.join(folder, "c.db"))
+            conn.executescript(helper.SCHEMA)
+            conn.execute("INSERT INTO calendars(url, name, enabled) VALUES('https://x/cal/', 'Cal', 1)")
+            conn.execute("INSERT INTO objects(url, calendar, ics, uid) VALUES(?,?,?,?)",
+                         ("https://x/cal/moved-1.ics", "https://x/cal/", MOVED, "moved-1"))
+            event = helper.event_detail(conn, "moved-1", "20261014T143000Z",
+                                        "2026-10-15T14:15:00+00:00")["event"]
+            conn.close()
+        self.assertEqual(event["title"], "Weekly, moved")
+        self.assertEqual(event["startZone"], "UTC")
+        self.assertEqual(event["startWall"], "2026-10-15T14:15:00")
+
+
 class Organizer(unittest.TestCase):
     def test_icloud_organizer_is_read_from_its_email(self):
         import gi
