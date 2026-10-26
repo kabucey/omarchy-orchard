@@ -2661,12 +2661,19 @@ function duplicateOf(event) {
 // helper read them (startWall, endWall), so an event set for 09:00 in Tokyo
 // edits as 09:00 Tokyo. Without them — a new event, or an event that has no
 // zone — they are the viewer's, and the zones default to `localZone`.
+function isUtcZone(name) {
+  return name === "UTC" || name === "Etc/UTC" || name === "Z"
+}
+
 function editDraft(event, localZone) {
   var e = event || {}
   var allDay = !!e.allDay
   var here = localZone || e.localZone || ""
-  var startSource = !allDay && e.startWall ? e.startWall : e.start
-  var endSource = !allDay && e.endWall ? e.endWall : e.end
+  // An event written in UTC says nothing about where its people are, so it
+  // opens in the viewer's own zone, at the times that is there.
+  var utcStart = isUtcZone(e.startZone), utcEnd = isUtcZone(e.endZone)
+  var startSource = !allDay && e.startWall && !utcStart ? e.startWall : e.start
+  var endSource = !allDay && e.endWall && !utcEnd ? e.endWall : e.end
   var startDate = dateKey(startSource)
   var endDate = dateKey(endSource) || startDate
   var startTime = allDay ? DEFAULT_START : (timeOf(startSource) || DEFAULT_START)
@@ -2697,8 +2704,8 @@ function editDraft(event, localZone) {
     invitees.push({ email: list[a].email || "", name: list[a].name || "",
                     status: list[a].status || "NEEDS-ACTION" })
 
-  var startZone = (e.startZone && e.startZone !== "") ? e.startZone : here
-  var endZone = (e.endZone && e.endZone !== "") ? e.endZone : startZone
+  var startZone = (e.startZone && !utcStart) ? e.startZone : here
+  var endZone = (e.endZone && !utcEnd) ? e.endZone : startZone
 
   return {
     title: e.title || "",

@@ -2994,6 +2994,21 @@ def wall_in(seconds: int, zone_name: str) -> str:
     return datetime.fromtimestamp(seconds, zone).strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def zone_info(name: str):
+    if name in ("UTC", "Z"):
+        return timezone.utc
+    try:
+        return ZoneInfo(name) if name else LOCAL_TZ
+    except Exception:
+        return LOCAL_TZ
+
+
+def convert_wall(wall: str, from_zone: str, to_zone: str) -> str:
+    """A wall time in one zone, as the same instant reads in another."""
+    moment = datetime.fromisoformat(wall[:19]).replace(tzinfo=zone_info(from_zone))
+    return moment.astimezone(zone_info(to_zone)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def event_detail(conn, uid: str, rid: str, at: str = "", href: str = "") -> dict:
     cals = visible_calendars(conn)
     if href:
@@ -4860,7 +4875,7 @@ def main(argv: list[str]) -> int:
         "calendars", "set-calendar", "forget-calendar", "sync",
         "events", "event", "search", "agenda", "alerts", "status", "settings", "watch",
         "contacts", "contacts-sync", "contacts-forget", "places-history", "places",
-        "save", "delete", "pick-file", "import-google-client", "zones", "flush", "pending-dismiss",
+        "save", "delete", "pick-file", "import-google-client", "zones", "convert-wall", "flush", "pending-dismiss",
         "update-check",
     ])
     ap.add_argument("--user", default=os.environ.get("ORCHARD_USER", ""))
@@ -4882,6 +4897,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--interval", type=int, default=0)
     ap.add_argument("--enabled", choices=["true", "false"], default="")
     ap.add_argument("--color", default="")
+    ap.add_argument("--wall", default="")
+    ap.add_argument("--from-zone", dest="from_zone", default="")
+    ap.add_argument("--to-zone", dest="to_zone", default="")
     ap.add_argument("--name", default="")
     ap.add_argument("--set", action="append", default=[])
     ap.add_argument("--force", action="store_true")
@@ -5268,6 +5286,9 @@ def _dispatch_unlocked(conn, args) -> dict:
 
     if args.command == "zones":
         return {"ok": True, "local": local_zone_name(), "zones": zone_list()}
+
+    if args.command == "convert-wall":
+        return {"ok": True, "wall": convert_wall(args.wall, args.from_zone, args.to_zone)}
 
     if args.command == "pick-file":
         return pick_file()

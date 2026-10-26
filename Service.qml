@@ -46,6 +46,30 @@ QtObject {
     zonesProc.running = true
   }
 
+  // The same instant in another zone: calls back with the wall time there.
+  // Zone rules are the helper's, so this asks it; each call is its own process.
+  function convertWall(wall, fromZone, toZone, done) {
+    var proc = convertComponent.createObject(root, {
+      command: [helper, "convert-wall", "--wall", wall,
+                "--from-zone", fromZone || "", "--to-zone", toZone || ""],
+      done: done
+    })
+    proc.running = true
+  }
+
+  property Component convertComponent: Component {
+    Process {
+      id: convert
+      property var done
+      stdout: StdioCollector { id: convertOut; waitForEnd: true }
+      onExited: {
+        var payload = root.parse(convertOut.text, "the time did not convert")
+        if (payload && payload.ok && convert.done) convert.done(payload.wall)
+        convert.destroy()
+      }
+    }
+  }
+
   property Process zonesProc: Process {
     running: false
     stdout: StdioCollector { id: zonesOut; waitForEnd: true }

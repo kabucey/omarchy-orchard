@@ -494,6 +494,39 @@ Panel {
     if (draft) draft = Logic.withField(draft, field, value)
   }
 
+  // Another zone for one end keeps the moment and changes the clock: 09:00
+  // in Chicago becomes 10:00 in New York. The end follows the start when it
+  // was in the same zone. Without the helper the clock is left as it was.
+  function setZone(which, zone) {
+    var d = draft
+    if (!d || zone === d[which + "Zone"]) return
+    var ends = which === "start" && d.endZone === d.startZone ? ["start", "end"] : [which]
+    var old = d[which + "Zone"]
+    var pending = ends.length
+    var moved = {}
+    var finish = function () {
+      if (--pending > 0 || !draft) return
+      var out = Object.assign({}, draft)
+      for (var i = 0; i < ends.length; i++) {
+        var e = ends[i]
+        if (moved[e]) {
+          out[e + "Date"] = moved[e].slice(0, 10)
+          out[e + "Time"] = moved[e].slice(11, 16)
+        }
+        out[e + "Zone"] = zone
+      }
+      draft = out
+    }
+    if (!service || !Logic.isDateKey(d.startDate) || !Logic.isClock(d.startTime)) {
+      setDraft(which + "Zone", zone)
+      return
+    }
+    ends.forEach(function (e) {
+      service.convertWall(d[e + "Date"] + "T" + d[e + "Time"] + ":00", old, zone,
+                          function (wall) { moved[e] = wall; finish() })
+    })
+  }
+
   function setRule(part, value) { if (draft) draft = Logic.withRule(draft, part, value) }
   function toggleRuleDay(code) { if (draft) draft = Logic.withDayToggled(draft, code) }
   function setAlert(slot, value) { if (draft) draft = Logic.withAlert(draft, slot, value) }
@@ -7007,7 +7040,7 @@ Panel {
                   visible: !editorBody.d.allDay
                   width: parent.width
                   value: editorBody.d.startZone || ""
-                  onPicked: function (zone) { root.setDraft("startZone", zone) }
+                  onPicked: function (zone) { root.setZone("start", zone) }
                 }
               }
 
@@ -7035,7 +7068,7 @@ Panel {
                   visible: !editorBody.d.allDay
                   width: parent.width
                   value: editorBody.d.endZone || ""
-                  onPicked: function (zone) { root.setDraft("endZone", zone) }
+                  onPicked: function (zone) { root.setZone("end", zone) }
                 }
               }
 
